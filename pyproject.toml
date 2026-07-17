@@ -1,0 +1,46 @@
+[project]
+name = "PiecePriority"
+version = "1.0.0"
+description = "Exposes libtorrent per-piece priority and deadline control over Deluge's RPC — see docs/spec/01-core-rpc.md."
+license = { text = "MIT" }
+requires-python = ">=3.9"
+
+[project.entry-points."deluge.plugin.core"]
+PiecePriority = "deluge_piecepriority:CorePlugin"
+
+[project.entry-points."deluge.plugin.web"]
+PiecePriority = "deluge_piecepriority:WebUIPlugin"
+
+[project.entry-points."deluge.plugin.gtk3ui"]
+PiecePriority = "deluge_piecepriority:Gtk3UIPlugin"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+exclude = ["tests", "tests.*"]
+
+[tool.setuptools.package-data]
+deluge_piecepriority = ["data/*.js"]
+
+[dependency-groups]
+dev = [
+    "deluge",
+    "pytest",
+    "ty",
+    # Deluge 2.2.0's setup.py declares an unpinned "pyopenssl" dependency;
+    # pyOpenSSL >=24.2 deprecated (and later removed) OpenSSL.crypto.X509Req,
+    # which Deluge's own crypto_utils.generate_ssl_keys() still calls,
+    # crashing deluged on startup with a real, unpinned-upstream, not
+    # something wrong in this project. Pinned here so `deluged` actually
+    # starts for live validation against this plugin.
+    "pyopenssl<24.2",
+]
+
+# No [tool.ty] section: ty auto-detects its python-version target from
+# project.requires-python above, and its default rule set already checks
+# unannotated code (unlike mypy, which needs strict=true for that) — no
+# extra config has been needed so far. libtorrent's lack of type stubs is
+# suppressed at its one import site in deluge_piecepriority/core.py, not
+# globally, since ty has no per-module "ignore missing" override.

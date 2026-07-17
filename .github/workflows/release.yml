@@ -1,0 +1,119 @@
+name: Release
+
+# Deluge's plugin loader scopes discovery to its own bundled plugins
+# directory and <config-dir>/plugins/ -- it never scans the general Python
+# environment (see docs/spec/05-packaging-compat.md's "Installation"), so
+# there's nothing to publish to PyPI. What Deluge actually consumes is a
+# prebuilt .egg dropped into that folder, and .egg filenames are tied to a
+# specific Python minor version (pkg_resources.Environment checks it), so
+# every release builds one egg per Deluge-supported Python version and
+# attaches all of them. install.sh/install.ps1 pick the one matching the
+# caller's interpreter.
+#
+# Two ways in, mirroring the sibling TorrentSeek repo's release.yml:
+#   push to main   -> rebuild the rolling "latest" prerelease, so
+#                     install.sh/install.ps1 (and TorrentSeek's own Deluge
+#                     backend, which consumes this plugin's RPC surface)
+#                     have a moving target to test against between tags
+#   push tag v*    -> versioned release for that tag
+#
+# Tags must equal v<pyproject.toml's version> -- this is a Python package
+# whose version already lives in one place, and a tag that drifted from it
+# would just be a second, contradictory source of truth. There's
+# deliberately no workflow_dispatch "cut a release" mode for the same
+# reason: a semver bump is a judgment call (patch/minor/major) that has to
+# be made in the pyproject.toml edit itself, not invented by the workflow.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        # Keep in sync with docs/spec/05-packaging-compat.md's Python
+        # version floor and Deluge's own supported range.
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Building the egg only packages this project's own pure-Python
+      # source -- it doesn't import deluge_piecepriority, so it needs
+      # neither the real `deluge` nor `libtorrent` packages, unlike the CI
+      # test job.
+      - name: Build egg
+        run: |
+          python -m pip install --upgrade pip setuptools
+          python -c "from setuptools import setup; setup()" bdist_egg
+
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: egg-py${{ matrix.python-version }}
+          path: dist/*.egg
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          # Pinned rather than relying on the runner's default python3 --
+          # the tag-version check below needs tomllib (3.11+), which isn't
+          # guaranteed by "whatever ubuntu-latest ships today".
+          python-version: "3.12"
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          path: dist-all
+          pattern: egg-py*
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist-all
+          sha256sum *.egg > sha256sums.txt
+
+      - name: Verify tag matches pyproject.toml version (tagged release only)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          pkg_version="$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")"
+          if [[ "$tag" != "v$pkg_version" ]]; then
+            echo "::error::tag '$tag' does not match pyproject.toml's version '$pkg_version' (expected tag 'v$pkg_version')" >&2
+            exit 1
+          fi
+
+      - name: Publish versioned release (pushed tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release create "$tag" dist-all/* \
+            --title "$tag" \
+            --notes "PiecePriority $tag ($(git rev-parse --short HEAD))"
+
+      - name: Update rolling latest prerelease (main push)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          gh release delete latest --yes || true
+          git push origin :refs/tags/latest || true
+          gh release create latest dist-all/* \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title 'latest (rolling)' \
+            --notes "Rolling build of main @ $(git rev-parse --short HEAD): $(git log -1 --format=%s)"
