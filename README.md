@@ -5,6 +5,8 @@ deadlines (`piece_priority`, `set_piece_deadline`) over Deluge's
 existing RPC channel, plus WebUI and GTK3 UI panels built on that same RPC
 surface.
 
+![The Pieces tab in Deluge's GTK UI mid-download: per-piece states, with a band of pieces marked Urgent being fetched ahead of everything else and a Skipped band excluded entirely](docs/screenshot-gtkui.png)
+
 ## Compatibility
 
 - Deluge 2.0, 2.1, or 2.2, with libtorrent 1.2 or 2.0
